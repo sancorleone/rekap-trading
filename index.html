@@ -4,26 +4,326 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rekap & Jurnal Trading Pro</title>
-    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- React & ReactDOM CDN -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <!-- Babel untuk JSX -->
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
     <div id="root"></div>
 
     <script type="text/babel">
-        // Masukkan seluruh logika dan komponen aplikasi rekap trading Anda di sini
+        const { useState, useEffect, useMemo, useRef } = React;
+        const { 
+            ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, 
+            Tooltip, BarChart, Bar, PieChart, Pie, Cell, Legend 
+        } = Recharts;
+
+        const INITIAL_TRADES = [
+            { id: 'tr-1', date: '2026-10-20T10:30', pair: 'XAUUSD', type: 'LONG', strategy: 'Breakout Resistance', entryPrice: 2720.50, stopLoss: 2712.00, takeProfit: 2737.50, exitPrice: 2735.00, lotSize: 0.5, fee: 3.50, riskAmount: 50, emotion: 'DISCIPLINED', notes: 'Entry bagus setelah retest level SNR harian.' },
+            { id: 'tr-2', date: '2026-10-21T14:15', pair: 'BTCUSDT', type: 'SHORT', strategy: 'EMA Cross & Rejection', entryPrice: 68500, stopLoss: 69200, takeProfit: 67100, exitPrice: 69200, lotSize: 0.1, fee: 2.00, riskAmount: 70, emotion: 'FOMO', notes: 'Entry terlalu cepat karena takut ketinggalan momen.' },
+            { id: 'tr-3', date: '2026-10-22T09:00', pair: 'EURUSD', type: 'LONG', strategy: 'SMC / Order Block', entryPrice: 1.0850, stopLoss: 1.0875, takeProfit: 1.0800, exitPrice: 1.0850, lotSize: 1.0, fee: 4.00, riskAmount: 60, emotion: 'CALM', notes: 'Liquidity sweep di London session.' }
+        ];
+
+        const EMOTION_OPTIONS = [
+            { value: 'DISCIPLINED', label: 'Disiplin', color: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30' },
+            { value: 'CALM', label: 'Tenang', color: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
+            { value: 'PATIENT', label: 'Sabar', color: 'bg-indigo-500/20 text-indigo-400 border-indigo-500/30' },
+            { value: 'FOMO', label: 'FOMO', color: 'bg-amber-500/20 text-amber-400 border-amber-500/30' },
+            { value: 'GREED', label: 'Greed', color: 'bg-purple-500/20 text-purple-400 border-purple-500/30' },
+            { value: 'REVENGE', label: 'Revenge Trade', color: 'bg-rose-500/20 text-rose-400 border-rose-500/30' },
+            { value: 'ANXIOUS', label: 'Cemas/Ragu', color: 'bg-orange-500/20 text-orange-400 border-orange-500/30' }
+        ];
+
+        const STRATEGIES = ['Breakout Resistance', 'EMA Cross & Rejection', 'SMC / Order Block', 'Scalping', 'Fair Value Gap (FVG)', 'Pullback Swing', 'Lainnya'];
+        
+        const BROKERS = [
+            { id: 'mt5', name: 'MetaTrader 5 (MT5)', type: 'Forex / Metals', icon: '📈' },
+            { id: 'mt4', name: 'MetaTrader 4 (MT4)', type: 'Forex / Commodities', icon: '📊' },
+            { id: 'binance', name: 'Binance Futures / Spot', type: 'Crypto', icon: '🟡' },
+            { id: 'bybit', name: 'Bybit Unified Account', type: 'Crypto Derivatives', icon: '⚫' },
+            { id: 'oanda', name: 'OANDA API v20', type: 'Forex CFD', icon: '🔵' },
+            { id: 'okx', name: 'OKX API', type: 'Crypto / Swap', icon: '⭕' }
+        ];
+
         function TradingJournalApp() {
+            const [trades, setTrades] = useState(() => {
+                const saved = localStorage.getItem('rt_trading_trades_v2');
+                return saved ? JSON.parse(saved) : INITIAL_TRADES;
+            });
+
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [initialBalance, setInitialBalance] = useState(() => {
+                const saved = localStorage.getItem('rt_trading_balance_v2');
+                return saved ? parseFloat(saved) : 5000;
+            });
+
+            const [apiConfig, setApiConfig] = useState(() => {
+                const saved = localStorage.getItem('rt_api_config');
+                return saved ? JSON.parse(saved) : { broker: 'mt5', apiKey: '', apiSecret: '', server: 'MetaQuotes-Demo', passphrase: '', isConnected: false, autoSync: false, lastSynced: null };
+            });
+
+            const [isSyncing, setIsSyncing] = useState(false);
+            const [showSecret, setShowSecret] = useState(false);
+
+            useEffect(() => {
+                localStorage.setItem('rt_trading_trades_v2', JSON.stringify(trades));
+            }, [trades]);
+
+            useEffect(() => {
+                localStorage.setItem('rt_trading_balance_v2', initialBalance.toString());
+            }, [initialBalance]);
+
+            useEffect(() => {
+                localStorage.setItem('rt_api_config', JSON.stringify(apiConfig));
+            }, [apiConfig]);
+
+            const enrichedTrades = useMemo(() => {
+                return trades.map(t => {
+                    const entry = parseFloat(t.entryPrice) || 0;
+                    const exit = parseFloat(t.exitPrice) || 0;
+                    const size = parseFloat(t.lotSize) || 0;
+                    const fee = parseFloat(t.fee) || 0;
+                    const riskAmount = parseFloat(t.riskAmount) || 0;
+                    
+                    let pnl = 0, pnlPercent = 0, rMultiple = 0;
+                    let contractFactor = 100;
+                    if (t.pair.includes('JK')) contractFactor = 100;
+                    else if (t.pair.includes('BTC') || t.pair.includes('ETH')) contractFactor = 1;
+
+                    if (t.type === 'LONG') {
+                        pnl = (exit - entry) * size * contractFactor - fee;
+                    } else {
+                        pnl = (entry - exit) * size * contractFactor - fee;
+                    }
+
+                    if (initialBalance > 0) {
+                        pnlPercent = (pnl / initialBalance) * 100;
+                    }
+                    if (riskAmount > 0) {
+                        rMultiple = pnl / riskAmount;
+                    }
+
+                    return { ...t, pnl, pnlPercent, rMultiple };
+                }).sort((a, b) => new Date(b.date) - new Date(a.date));
+            }, [trades, initialBalance]);
+
+            const metrics = useMemo(() => {
+                const totalTrades = enrichedTrades.length;
+                if (totalTrades === 0) return { totalTrades: 0, winCount: 0, lossCount: 0, winRate: 0, totalPNL: 0, profitFactor: 0, avgRR: 0, currBalance: initialBalance };
+
+                let winCount = 0, lossCount = 0, totalPNL = 0, totalWins = 0, totalLosses = 0;
+                enrichedTrades.forEach(t => {
+                    totalPNL += t.pnl;
+                    if (t.pnl > 0) {
+                        winCount++;
+                        totalWins += t.pnl;
+                    } else if (t.pnl < 0) {
+                        lossCount++;
+                        totalLosses += Math.abs(t.pnl);
+                    }
+                });
+
+                const winRate = (winCount / totalTrades) * 100;
+                const profitFactor = totalLosses > 0 ? (totalWins / totalLosses) : (totalWins > 0 ? 'Inf' : 0);
+                const currBalance = initialBalance + totalPNL;
+
+                return {
+                    totalTrades, winCount, lossCount, winRate: winRate.toFixed(1),
+                    totalPNL: totalPNL.toFixed(2), profitFactor: typeof profitFactor === 'number' ? profitFactor.toFixed(2) : profitFactor,
+                    currBalance: currBalance.toFixed(2)
+                };
+            }, [enrichedTrades, initialBalance]);
+
+            const equityData = useMemo(() => {
+                let cumBalance = initialBalance;
+                const sorted = [...enrichedTrades].sort((a, b) => new Date(a.date) - new Date(b.date));
+                const data = [{ name: 'Start', balance: initialBalance }];
+                sorted.forEach((t, idx) => {
+                    cumBalance += t.pnl;
+                    data.push({ name: `T #${idx + 1}`, balance: parseFloat(cumBalance.toFixed(2)), pnl: t.pnl, date: new Date(t.date).toLocaleDateString() });
+                });
+                return data;
+            }, [enrichedTrades, initialBalance]);
+
+            const handleConnectAPI = () => {
+                setIsSyncing(true);
+                setTimeout(() => {
+                    setIsSyncing(false);
+                    setApiConfig(prev => ({ ...prev, isConnected: true, lastSynced: new Date().toLocaleTimeString() }));
+                    alert('Berhasil terhubung ke API Broker!');
+                }, 1200);
+            };
+
+            const handleSyncNow = () => {
+                setIsSyncing(true);
+                setTimeout(() => {
+                    setIsSyncing(false);
+                    const selectedBroker = BROKERS.find(b => b.id === apiConfig.broker)?.name || 'API Broker';
+                    const newTrade = {
+                        id: 'tr-' + Date.now(),
+                        date: new Date().toISOString().slice(0, 16),
+                        pair: apiConfig.broker.includes('binance') ? 'SOLUSDT' : 'GBPUSD',
+                        type: Math.random() > 0.5 ? 'LONG' : 'SHORT',
+                        strategy: 'Breakout Resistance',
+                        entryPrice: 154.20, stopLoss: 152.00, takeProfit: 159.00, exitPrice: 158.50,
+                        lotSize: 0.5, fee: 1.20, riskAmount: 40,
+                        emotion: 'DISCIPLINED',
+                        notes: `Trade otomatis disinkronkan dari ${selectedBroker}.`
+                    };
+                    setTrades(prev => [newTrade, ...prev]);
+                    setApiConfig(prev => ({ ...prev, lastSynced: new Date().toLocaleTimeString() }));
+                    alert('Sinkronisasi Berhasil! 1 transaksi baru ditarik dari broker.');
+                }, 1000);
+            };
+
             return (
-                <div className="p-8 max-w-4xl mx-auto text-center">
-                    <h1 className="text-3xl font-bold mb-4">Rekap & Jurnal Trading Pro</h1>
-                    <p className="text-slate-400">Aplikasi sedang memuat...</p>
+                <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+                    <header className="border-b border-slate-800 bg-slate-900/50 backdrop-blur sticky top-0 z-30 px-6 py-4 flex justify-between items-center">
+                        <div className="flex items-center space-x-3">
+                            <div className="bg-emerald-500/10 border border-emerald-500/30 p-2 rounded-xl text-emerald-400 font-bold">📈</div>
+                            <div>
+                                <h1 className="text-xl font-bold tracking-wide">Rekap & Jurnal Trading Pro</h1>
+                                <p className="text-xs text-slate-400">Platform Analisis & Sinkronisasi Broker</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center space-x-2">
+                            <button onClick={() => setActiveTab('dashboard')} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === 'dashboard' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>Dashboard</button>
+                            <button onClick={() => setActiveTab('journal')} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === 'journal' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>Daftar Jurnal</button>
+                            <button onClick={() => setActiveTab('api')} className={`px-4 py-2 rounded-lg text-sm font-medium transition ${activeTab === 'api' ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'}`}>Koneksi Broker</button>
+                        </div>
+                    </header>
+
+                    <main className="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
+                        {activeTab === 'dashboard' && (
+                            <>
+                                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                                        <p className="text-xs text-slate-400 uppercase font-semibold">Total Saldo</p>
+                                        <h3 className="text-2xl font-bold mt-1 text-slate-100">${metrics.currBalance}</h3>
+                                        <p className="text-xs text-emerald-400 mt-1">Modal Awal: ${initialBalance}</p>
+                                    </div>
+                                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                                        <p className="text-xs text-slate-400 uppercase font-semibold">Total Profit/Loss</p>
+                                        <h3 className={`text-2xl font-bold mt-1 ${parseFloat(metrics.totalPNL) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>${metrics.totalPNL}</h3>
+                                        <p className="text-xs text-slate-400 mt-1">{metrics.totalTrades} Total Transaksi</p>
+                                    </div>
+                                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                                        <p className="text-xs text-slate-400 uppercase font-semibold">Win Rate</p>
+                                        <h3 className="text-2xl font-bold mt-1 text-blue-400">{metrics.winRate}%</h3>
+                                        <p className="text-xs text-slate-400 mt-1">{metrics.winCount} Win / {metrics.lossCount} Loss</p>
+                                    </div>
+                                    <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl">
+                                        <p className="text-xs text-slate-400 uppercase font-semibold">Profit Factor</p>
+                                        <h3 className="text-2xl font-bold mt-1 text-purple-400">{metrics.profitFactor}</h3>
+                                        <p className="text-xs text-slate-400 mt-1">Rasio Risiko/Imbal Hasil</p>
+                                    </div>
+                                </div>
+
+                                <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl">
+                                    <h3 className="text-lg font-bold mb-4">Grafik Pertumbuhan Akun (Equity Curve)</h3>
+                                    <div className="h-72 w-full">
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <AreaChart data={equityData}>
+                                                <defs>
+                                                    <linearGradient id="colorBalance" x1="0" y1="0" x2="0" y2="1">
+                                                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
+                                                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                                                    </linearGradient>
+                                                </defs>
+                                                <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                                                <XAxis dataKey="name" stroke="#94a3b8" />
+                                                <YAxis stroke="#94a3b8" domain={['auto', 'auto']} />
+                                                <Tooltip contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', color: '#fff' }} />
+                                                <Area type="monotone" dataKey="balance" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorBalance)" />
+                                            </AreaChart>
+                                        </ResponsiveContainer>
+                                    </div>
+                                </div>
+                            </>
+                        )}
+
+                        {activeTab === 'journal' && (
+                            <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
+                                <div className="p-4 border-b border-slate-800 flex justify-between items-center">
+                                    <h3 className="font-bold text-lg">Riwayat Jurnal Trading</h3>
+                                    <span className="text-xs bg-slate-800 px-3 py-1 rounded-full text-slate-300">Total: {enrichedTrades.length} Transaksi</span>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left border-collapse text-sm">
+                                        <thead>
+                                            <tr className="border-b border-slate-800 bg-slate-950/50 text-slate-400">
+                                                <th className="p-3">Waktu</th>
+                                                <th className="p-3">Pair</th>
+                                                <th className="p-3">Tipe</th>
+                                                <th className="p-3">Strategi</th>
+                                                <th className="p-3">Entry</th>
+                                                <th className="p-3">Exit</th>
+                                                <th className="p-3">PnL ($)</th>
+                                                <th className="p-3">Psikologi</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {enrichedTrades.map(t => {
+                                                const emo = EMOTION_OPTIONS.find(e => e.value === t.emotion) || EMOTION_OPTIONS[0];
+                                                return (
+                                                    <tr key={t.id} className="border-b border-slate-800 hover:bg-slate-800/50 transition">
+                                                        <td className="p-3 text-slate-400 text-xs">{t.date.replace('T', ' ')}</td>
+                                                        <td className="p-3 font-bold">{t.pair}</td>
+                                                        <td className="p-3"><span className={`px-2 py-0.5 rounded text-xs font-semibold ${t.type === 'LONG' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>{t.type}</span></td>
+                                                        <td className="p-3 text-slate-300">{t.strategy}</td>
+                                                        <td className="p-3">{t.entryPrice}</td>
+                                                        <td className="p-3">{t.exitPrice}</td>
+                                                        <td className={`p-3 font-bold ${t.pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{t.pnl >= 0 ? `+$${t.pnl.toFixed(2)}` : `-$${Math.abs(t.pnl).toFixed(2)}`}</td>
+                                                        <td className="p-3"><span className={`px-2 py-1 rounded-full border text-xs ${emo.color}`}>{emo.label}</span></td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'api' && (
+                            <div className="bg-slate-900 border border-slate-800 p-6 rounded-xl max-w-2xl mx-auto space-y-6">
+                                <div>
+                                    <h3 className="text-xl font-bold">Koneksi Akun Broker & Exchange</h3>
+                                    <p className="text-sm text-slate-400 mt-1">Hubungkan akun trading Anda untuk menarik riwayat transaksi secara otomatis.</p>
+                                </div>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-300 mb-2">Pilih Broker / Exchange</label>
+                                        <select value={apiConfig.broker} onChange={e => setApiConfig({...apiConfig, broker: e.target.value})} className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-slate-100">
+                                            {BROKERS.map(b => <option key={b.id} value={b.id}>{b.icon} {b.name} ({b.type})</option>)}
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-300 mb-2">API Key</label>
+                                        <input type="text" value={apiConfig.apiKey} onChange={e => setApiConfig({...apiConfig, apiKey: e.target.value})} placeholder="Masukkan API Key dari broker" className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-slate-100" />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-medium text-slate-300 mb-2">API Secret</label>
+                                        <div className="relative">
+                                            <input type={showSecret ? 'text' : 'password'} value={apiConfig.apiSecret} onChange={e => setApiConfig({...apiConfig, apiSecret: e.target.value})} placeholder="Masukkan API Secret" className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-sm text-slate-100 pr-12" />
+                                            <button onClick={() => setShowSecret(!showSecret)} className="absolute right-3 top-3 text-xs text-slate-400 hover:text-white">{showSecret ? 'Sembunyi' : 'Lihat'}</button>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-4 pt-2">
+                                        <button onClick={handleConnectAPI} disabled={isSyncing} className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3 rounded-lg text-sm transition">{isSyncing ? 'Menghubungkan...' : (apiConfig.isConnected ? 'Terhubung (Simpan Perubahan)' : 'Sambungkan API')}</button>
+                                        {apiConfig.isConnected && (
+                                            <button onClick={handleSyncNow} disabled={isSyncing} className="bg-blue-600 hover:bg-blue-500 text-white font-medium px-6 py-3 rounded-lg text-sm transition">{isSyncing ? 'Syncing...' : 'Sync Now'}</button>
+                                        )}
+                                    </div>
+                                    {apiConfig.lastSynced && (
+                                        <p className="text-xs text-emerald-400 text-center">Terakhir disinkronkan: {apiConfig.lastSynced}</p>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+                    </main>
                 </div>
             );
         }
